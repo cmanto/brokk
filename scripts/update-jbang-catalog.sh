@@ -27,21 +27,78 @@ fi
 
 echo "Updating JBang catalog for version $VERSION..."
 
-# Create the new JAR URL
-JAR_URL="https://github.com/BrokkAi/brokk/releases/download/${VERSION}/brokk-${VERSION}.jar"
-
-# Check if the JAR URL exists
-echo "Checking if JAR exists at: $JAR_URL"
-# Use --fail-with-body for better error handling across curl versions
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$JAR_URL" 2>/dev/null || echo "000")
-
-if [ "$HTTP_STATUS" != "200" ]; then
-    echo "Error: JAR not found at $JAR_URL (HTTP status: $HTTP_STATUS)"
-    echo "Please ensure the release has been created and the JAR has been uploaded."
-    exit 1
+# Detect GitHub repository from git remote or use environment variable
+if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    # In GitHub Actions, use the GITHUB_REPOSITORY environment variable
+    REPO_SLUG="$GITHUB_REPOSITORY"
+else
+    # Try to detect from git remote
+    REPO_URL=$(git config --get remote.origin.url 2>/dev/null || echo "")
+    if [ -n "$REPO_URL" ]; then
+        # Extract owner/repo from various Git URL formats using sed
+        if echo "$REPO_URL" | grep -q "github.com"; then
+            REPO_SLUG=$(echo "$REPO_URL" | sed -E 's|.*github\.com[:/]([^/]+)/([^/.]+)(\.git)?.*|\1/\2|')
+            # Validate the extraction worked
+            if [ "$REPO_SLUG" = "$REPO_URL" ]; then
+                echo "Warning: Could not parse repository from git remote: $REPO_URL"
+                REPO_SLUG="BrokkAi/brokk"
+            fi
+        else
+            echo "Warning: Remote is not a GitHub repository: $REPO_URL"
+            REPO_SLUG="BrokkAi/brokk"
+        fi
+    else
+        echo "Warning: No git remote found, using default repository"
+        REPO_SLUG="BrokkAi/brokk"
+    fi
 fi
 
-echo "✓ JAR confirmed to exist at $JAR_URL"
+echo "Using repository: $REPO_SLUG"
+
+# Create the new JAR URL
+JAR_URL="https://github.com/${REPO_SLUG}/releases/download/${VERSION}/brokk-${VERSION}.jar"
+
+# Check if the JAR URL exists (only in CI environment)
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "Running in CI - checking if JAR exists at: $JAR_URL"
+
+    MAX_RETRIES=5
+    RETRY_DELAY=10
+    attempt=1
+
+    # Initial delay to allow GitHub to process the uploaded asset
+    echo "Waiting 10s for GitHub to process the uploaded asset..."
+    sleep 10
+
+    while [ $attempt -le $MAX_RETRIES ]; do
+        echo "Attempt $attempt/$MAX_RETRIES..."
+
+        # Use --fail-with-body for better error handling across curl versions
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$JAR_URL" 2>/dev/null || echo "000")
+
+        if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✓ JAR confirmed to exist at $JAR_URL"
+            break
+        fi
+
+        if [ $attempt -eq $MAX_RETRIES ]; then
+            echo "Error: JAR not found at $JAR_URL after $MAX_RETRIES attempts (HTTP status: $HTTP_STATUS)"
+            echo "This could be due to:"
+            echo "  - Release asset still being processed by GitHub"
+            echo "  - Asset upload failed"
+            echo "  - Network connectivity issues"
+            echo "Please check the release page and try again in a few minutes."
+            exit 1
+        fi
+
+        echo "JAR not yet available (HTTP status: $HTTP_STATUS). Retrying in ${RETRY_DELAY}s..."
+        sleep $RETRY_DELAY
+        attempt=$((attempt + 1))
+    done
+else
+    echo "Running locally - skipping JAR URL check"
+    echo "Target JAR URL: $JAR_URL"
+fi
 
 # Create new entry for this version
 NEW_ENTRY=$(jq -n --arg version "brokk-$VERSION" --arg url "$JAR_URL" '{
@@ -53,7 +110,7 @@ NEW_ENTRY=$(jq -n --arg version "brokk-$VERSION" --arg url "$JAR_URL" '{
 }')
 
 # Process the catalog: update main alias, keep previous main + 2 other previous versions
-jq --arg url "$JAR_URL" --arg new_version "brokk-$VERSION" --argjson max "$MAX_VERSIONS" '
+jq --arg url "$JAR_URL" --arg new_version "brokk-$VERSION" --arg repo_slug "$REPO_SLUG" --argjson max "$MAX_VERSIONS" '
     # Extract the current main version from its URL to create a versioned alias
     (.aliases.brokk."script-ref" | match(".*/download/([^/]+)/.*").captures[0].string) as $current_main_version |
     # Update main brokk alias to point to new version
@@ -71,7 +128,7 @@ jq --arg url "$JAR_URL" --arg new_version "brokk-$VERSION" --argjson max "$MAX_V
     .aliases = (
         {"brokk": .aliases.brokk} +
         {($previous_main_key): {
-            "script-ref": ("https://github.com/BrokkAi/brokk/releases/download/" + $current_main_version + "/brokk-" + $current_main_version + ".jar"),
+            "script-ref": ("https://github.com/" + $repo_slug + "/releases/download/" + $current_main_version + "/brokk-" + $current_main_version + ".jar"),
             "java": "21",
             "java-options": ["--add-modules=jdk.incubator.vector"]
         }} +
