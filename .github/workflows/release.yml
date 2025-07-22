@@ -50,26 +50,15 @@ jobs:
           echo "jar_name=$JAR_NAME" >> $GITHUB_OUTPUT
           echo "Found JAR: $JAR_NAME"
 
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release and Upload Asset
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          release_name: Release ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
           draft: false
           prerelease: false
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.jar.outputs.jar_file }}
-          asset_name: ${{ steps.jar.outputs.jar_name }}
-          asset_content_type: application/java-archive
+          files: ${{ steps.jar.outputs.jar_file }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update JBang catalog
         run: |
