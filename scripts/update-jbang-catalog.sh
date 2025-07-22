@@ -10,14 +10,29 @@ for cmd in jq curl; do
     fi
 done
 
-VERSION="$1"
+VERSION="${1:-}"
 CATALOG_FILE="${2:-jbang-catalog.json}"
 MAX_VERSIONS="${3:-3}"
 
 if [ -z "$VERSION" ]; then
-    echo "Usage: $0 <version> [catalog-file] [max-versions]"
-    echo "Example: $0 0.12.4-M1"
-    exit 1
+    # Try to get the latest git tag
+    if command -v git &> /dev/null && git rev-parse --git-dir &> /dev/null; then
+        VERSION=$(git describe --tags --abbrev=0 2>/dev/null)
+        if [ -n "$VERSION" ]; then
+            echo "No version specified, using latest git tag: $VERSION"
+        else
+            echo "Error: No version specified and no git tags found"
+            echo "Usage: $0 [version] [catalog-file] [max-versions]"
+            echo "Example: $0 0.12.4-M1"
+            echo "If no version is provided, the latest git tag will be used"
+            exit 1
+        fi
+    else
+        echo "Error: No version specified and not in a git repository"
+        echo "Usage: $0 [version] [catalog-file] [max-versions]"
+        echo "Example: $0 0.12.4-M1"
+        exit 1
+    fi
 fi
 
 if [ ! -f "$CATALOG_FILE" ]; then
@@ -58,47 +73,21 @@ echo "Using repository: $REPO_SLUG"
 # Create the new JAR URL
 JAR_URL="https://github.com/${REPO_SLUG}/releases/download/${VERSION}/brokk-${VERSION}.jar"
 
-# Check if the JAR URL exists (only in CI environment)
-if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
-    echo "Running in CI - checking if JAR exists at: $JAR_URL"
+# Check if the JAR URL exists
+echo "Verifying JAR exists at: $JAR_URL"
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$JAR_URL" 2>/dev/null || echo "000")
 
-    MAX_RETRIES=5
-    RETRY_DELAY=10
-    attempt=1
-
-    # Initial delay to allow GitHub to process the uploaded asset
-    echo "Waiting 10s for GitHub to process the uploaded asset..."
-    sleep 10
-
-    while [ $attempt -le $MAX_RETRIES ]; do
-        echo "Attempt $attempt/$MAX_RETRIES..."
-
-        # Use --fail-with-body for better error handling across curl versions
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$JAR_URL" 2>/dev/null || echo "000")
-
-        if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✓ JAR confirmed to exist at $JAR_URL"
-            break
-        fi
-
-        if [ $attempt -eq $MAX_RETRIES ]; then
-            echo "Error: JAR not found at $JAR_URL after $MAX_RETRIES attempts (HTTP status: $HTTP_STATUS)"
-            echo "This could be due to:"
-            echo "  - Release asset still being processed by GitHub"
-            echo "  - Asset upload failed"
-            echo "  - Network connectivity issues"
-            echo "Please check the release page and try again in a few minutes."
-            exit 1
-        fi
-
-        echo "JAR not yet available (HTTP status: $HTTP_STATUS). Retrying in ${RETRY_DELAY}s..."
-        sleep $RETRY_DELAY
-        attempt=$((attempt + 1))
-    done
-else
-    echo "Running locally - skipping JAR URL check"
-    echo "Target JAR URL: $JAR_URL"
+if [ "$HTTP_STATUS" != "200" ]; then
+    echo "Error: JAR not found at $JAR_URL (HTTP status: $HTTP_STATUS)"
+    echo "Please ensure:"
+    echo "  - The release has been created on GitHub"
+    echo "  - The JAR has been uploaded as a release asset"
+    echo "  - The release is public (not draft)"
+    echo "You can check the release at: https://github.com/${REPO_SLUG}/releases/tag/${VERSION}"
+    exit 1
 fi
+
+echo "✓ JAR confirmed to exist at $JAR_URL"
 
 # Create new entry for this version
 NEW_ENTRY=$(jq -n --arg version "brokk-$VERSION" --arg url "$JAR_URL" '{
