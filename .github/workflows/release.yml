@@ -60,21 +60,6 @@ jobs:
           files: ${{ steps.jar.outputs.jar_file }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update JBang catalog
-        run: |
-          ./scripts/update-jbang-catalog.sh "${{ steps.version.outputs.version }}"
-
-      - name: Commit and push catalog update
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add jbang-catalog.json
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update JBang catalog for release ${{ steps.version.outputs.version }}"
-            git push origin HEAD:master
-          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
