@@ -79,6 +79,7 @@ else
     else
         echo "Warning: No git remote found, using default repository"
         REPO_SLUG="BrokkAi/brokk"
+
         echo "Using default repository: $REPO_SLUG"
     fi
 fi
